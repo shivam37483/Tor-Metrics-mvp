@@ -59,7 +59,6 @@
 //! - Logging levels (e.g., `info`, `debug`, `error`) can be adjusted via the `RUST_LOG` environment variable.
 
 use clap::Parser;
-use dotenv::dotenv;
 use log::info;
 use std::error::Error;
 use tor_metrics_mvp::export::export_to_postgres;
@@ -103,9 +102,6 @@ struct Args {
 async fn main() -> Result<(), Box<dyn Error>> {
   // Initialize logging
   env_logger::init();
-
-  // Load environment variables from .env file (if present)
-  dotenv().ok();
 
   // Parse command-line arguments
   let args = Args::parse();
