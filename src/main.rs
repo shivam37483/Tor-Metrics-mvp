@@ -19,7 +19,6 @@
 //! - **`tokio-postgres`**: For PostgreSQL database interaction.
 //! - **`log` and `env_logger`**: For structured logging instead of `println!`.
 //! - **`clap`**: For parsing command-line arguments to configure the application.
-//! - **`dotenv`**: For loading environment variables from a `.env` file.
 //! - **`chrono`**: Handles date and time operations, useful for timestamping metrics
 //! - **`serde_json**: Serializes and deserializes JSON data
 //!
@@ -29,30 +28,22 @@
 //! ## Usage
 //! 1. Ensure a PostgreSQL database is running (e.g., database `tor_metrics`, user `postgres`,
 //!    password `2099`).
-//! 2. Configure the application using either a `.env` file or command-line arguments:
-//!    - **Using a `.env` file**: Create a `.env` file in the project root with:
-//!      ```env
-//!      BASE_URL=https://collector.torproject.org
-//!      DIRS=recent/relay-descriptors/consensuses
-//!      DB_PARAMS=host=localhost user=postgres password=2099 dbname=tor_metrics
-//!      ```
-//!    - **Using CLI arguments**: Pass arguments when running the application (see below).
+//! 2. Customize the application by passing the command-line arguments (see below) if required:
 //! 3. Run the application:
 //!    ```sh
 //!    cargo run -- --base-url https://collector.torproject.org --dirs recent/relay-descriptors/consensuses --db-params "host=localhost user=postgres password=2099 dbname=tor_metrics"
 //!    ```
-//! 4. Alternatively, set environment variables directly:
-//!    ```sh
-//!    export BASE_URL=https://collector.torproject.org
-//!    export DIRS=recent/relay-descriptors/consensuses
-//!    export DB_PARAMS="host=localhost user=postgres password=2099 dbname=tor_metrics"
-//!    cargo run
-//!    ```
-//! 5. Logs will be output to the console, controlled by the `RUST_LOG` environment variable:
-//!    ```sh
-//!    export RUST_LOG=info
-//!    cargo run
-//!    ```
+//! 4. Logs will be output to the console, controlled by the `RUST_LOG` environment variable:
+//!      - For Windows:
+//!        ```sh
+//!        set RUST_LOG=info
+//!        cargo run
+//!        ```
+//!      - For Mac/linux:
+//!        ```sh
+//!        export RUST_LOG=info
+//!        cargo run
+//!        ```   
 //!
 //! ## Notes
 //! - The application uses asynchronous programming with `tokio`, requiring a running async runtime.
@@ -77,7 +68,7 @@ struct Args {
   #[clap(long, env = "DIRS", default_value = "recent/relay-descriptors/consensuses", value_delimiter = ',')]
   dirs: Vec<String>,
 
-  /// PostgreSQL connection string (e.g., "host=localhost user=postgres password=your_password dbname=tor_metrics").
+  /// PostgreSQL connection string (e.g., "host=localhost user=postgres password=2099 dbname=tor_metrics").
   #[clap(long, env = "DB_PARAMS", default_value = "host=localhost user=postgres password=2099 dbname=tor_metrics")]
   db_params: String,
 
