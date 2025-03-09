@@ -60,10 +60,18 @@ To use `bridge_pool_assignments`, follow these steps:
 
 2. **Clone the Repository**  
     ```sh
-    git clone https://github.com/your-username/tor_metrics_mvp.git
-    cd tor_metrics_mvp
+    git clone https://github.com/shivam37483/Tor-GSoC-25.git
+    cd Tor-GSoC-25
     ```
-3. **Control Logging**
+
+3. **Set up a PostgreSQL database**
+    ```sql
+    CREATE DATABASE dummy_tor_db;
+    ```
+
+4. **Update Args Struct of the main.rs with your Postgres's Password**
+
+5. **Control Logging**
     - Windows
       ```sh
       set RUST_LOG=info
@@ -78,7 +86,8 @@ To use `bridge_pool_assignments`, follow these steps:
 
     Log levels include error, warn, info, debug, and trace.
 
-4. **Configure and Run**
+
+6. **Configure and Run**
    
    Run the application with default settings or customise via command-line arguments (See rustdoc comments in the file):
 

@@ -82,7 +82,7 @@ struct Args {
   /// PostgreSQL connection string specifying database access details.
   ///
   /// Example: "host=localhost user=your_user password=your_password dbname=your_db"
-  #[clap(long, env = "DB_PARAMS", default_value = "host=localhost user=postgres password=2099 dbname=tor_metrics")]
+  #[clap(long, env = "DB_PARAMS", default_value = "host=localhost user=postgres password=<your_password> dbname=dummy_tor_db")]
   db_params: String,
 
   /// If set, clears any existing content in the database table before exporting new data.
@@ -110,7 +110,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
   // Parse command-line arguments
   let args = Args::parse();
-  info!("Starting Tor Metrics MVP with base URL: {}", args.base_url);
+  info!("Starting Bridge Pool Assignments Parser with base URL: {}", args.base_url);
 
   // Fetch bridge pool assignment files
   info!("Starting to fetch the files");
