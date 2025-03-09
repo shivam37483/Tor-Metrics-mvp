@@ -41,22 +41,6 @@ The application retrieves consensus documents from CollecTor, extracts key metri
    CREATE DATABASE tor_metrics;
    ```
 
-4. Create a user (e.g., postgres) with a password (e.g., 2099):
-     ```sql
-     CREATE USER postgres WITH PASSWORD '2099';
-     GRANT ALL PRIVILEGES ON DATABASE tor_metrics TO postgres;
-     ```
-
-5. Create the tor_metrics table:
-      ```sql
-       CREATE TABLE tor_metrics (
-         id SERIAL PRIMARY KEY,
-         metric_name TEXT NOT NULL,
-         metric_value BIGINT NOT NULL,
-         timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-       );
-     ```
-
 ### Running the Application
 
 1. Build and run with default settings from .env
