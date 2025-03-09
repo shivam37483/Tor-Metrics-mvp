@@ -51,8 +51,8 @@ const MAX_FILES_TO_EXPORT: usize = 100;
 /// # Examples
 ///
 /// ```rust,no_run
-/// use tor_metrics_mvp::parse::ParsedBridgePoolAssignment;
-/// use tor_metrics_mvp::export::export_to_postgres;
+/// use bridge_pool_assignments::parse::ParsedBridgePoolAssignment;
+/// use bridge_pool_assignments::export::export_to_postgres;
 /// use std::collections::BTreeMap;
 ///
 /// #[tokio::main]

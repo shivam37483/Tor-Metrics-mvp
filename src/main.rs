@@ -1,4 +1,4 @@
-//! Tor Metrics MVP: Fetch, Parse, and Export Bridge Pool Assignment Documents to PostgreSQL
+//! Bridge Pool Assignments Parser: Fetch, Parse, and Export Bridge Pool Assignment Documents to PostgreSQL
 //!
 //! This application demonstrates fetching Tor network bridge pool assignment documents from CollecTor,
 //! parsing their contents into structured data, and exporting the results to a PostgreSQL database.
@@ -21,7 +21,11 @@
 //! - **`clap`**: For parsing command-line arguments to configure the application.
 //! - **`chrono`**: Handles date and time operations, useful for timestamping metrics.
 //! - **`serde_json`**: Serializes and deserializes JSON data.
-//!
+//! - **`anyhow`**: For robust error handling across the application.
+//! - **`futures`**: For working with asynchronous operations and futures.
+//! - **`sha2`**: For computing SHA-2 hashes, ensuring data integrity.
+//! - **`hex`**: For encoding and decoding hexadecimal strings, used with hashes.
+//! 
 //! These dependencies are stable and widely used, aligning with the guideline to minimize
 //! external dependencies while enhancing functionality.
 //!
@@ -52,9 +56,9 @@
 use clap::Parser;
 use log::info;
 use std::error::Error;
-use tor_metrics_mvp::export::export_to_postgres;
-use tor_metrics_mvp::fetch::fetch_bridge_pool_files;
-use tor_metrics_mvp::parse::parse_bridge_pool_files;
+use bridge_pool_assignments::export::export_to_postgres;
+use bridge_pool_assignments::fetch::fetch_bridge_pool_files;
+use bridge_pool_assignments::parse::parse_bridge_pool_files;
 
 /// Command-line arguments for configuring the Tor Metrics MVP application.
 ///

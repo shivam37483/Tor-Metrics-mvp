@@ -21,6 +21,7 @@
 //! - `reqwest` for HTTP requests.
 //! - `log` for logging.
 //! - `anyhow` for error handling.
+//! - `Arc` for utilizing semaphores.
 //!
 //! ## Error Handling
 //!
@@ -34,8 +35,6 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 use log::{info, error};
 use std::sync::Arc;
-
-// Use anyhow for thread-safe error handling
 use anyhow::{Context, Result as AnyhowResult};
 
 /// Represents a fetched bridge pool assignment file's metadata and content.
@@ -72,7 +71,7 @@ pub struct BridgePoolFile {
 /// # Examples
 ///
 /// ```rust
-/// use tor_metrics_mvp::fetch::fetch_bridge_pool_files;
+/// use bridge_pool_assignments::fetch::fetch_bridge_pool_files;
 /// use anyhow::Result;
 ///
 /// #[tokio::main]

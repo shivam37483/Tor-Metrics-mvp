@@ -163,6 +163,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "bridge_pool_assignments"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "env_logger",
+ "futures",
+ "hex",
+ "log",
+ "reqwest",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-postgres",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1621,24 +1639,6 @@ dependencies = [
  "futures-sink",
  "pin-project-lite",
  "tokio",
-]
-
-[[package]]
-name = "tor_metrics_mvp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "env_logger",
- "futures",
- "hex",
- "log",
- "reqwest",
- "serde_json",
- "sha2",
- "tokio",
- "tokio-postgres",
 ]
 
 [[package]]

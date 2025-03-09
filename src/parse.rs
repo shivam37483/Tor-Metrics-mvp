@@ -52,8 +52,8 @@ pub struct ParsedBridgePoolAssignment {
 /// # Examples
 ///
 /// ```rust
-/// use tor_metrics_mvp::fetch::BridgePoolFile;
-/// use tor_metrics_mvp::parse::parse_bridge_pool_files;
+/// use bridge_pool_assignments::fetch::BridgePoolFile;
+/// use bridge_pool_assignments::parse::parse_bridge_pool_files;
 /// let files = vec![BridgePoolFile {
 ///   path: "file1".to_string(),
 ///   last_modified: 0,
