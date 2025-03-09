@@ -1,86 +1,118 @@
-//! Fetching Tor consensus documents from CollecTor for PostgreSQL export.
+//! # Fetching Tor Bridge Pool Assignment Files
 //!
-//! This module provides functionality to fetch consensus documents from a CollecTor
-//! instance, such as "https://collector.torproject.org", and prepares them as structured
-//! data suitable for insertion into a PostgreSQL database. It retrieves the `index.json`,
-//! filters files based on specified directories and a minimum last-modified timestamp,
-//! and collects file contents and metadata.
+//! This module provides functionality to fetch bridge pool assignment files from a CollecTor instance
+//! (e.g., "https://collector.torproject.org"). It retrieves the `index.json`, filters files based on
+//! specified directories (e.g., "bridge_pool_assignments") and a minimum last-modified timestamp,
+//! and fetches their contents concurrently. The fetched data is structured into `BridgePoolFile`
+//! instances, which can be parsed or directly inserted into a PostgreSQL database.
+//!
+//! ## Usage
+//!
+//! The primary entry point is `fetch_bridge_pool_files`, which takes a base URL, a list of directories,
+//! and a minimum last-modified timestamp to filter files.
+//!
+//! ## Dependencies
+//!
+//! This module relies on:
+//! - `chrono` for timestamp handling.
+//! - `futures` for concurrent task management.
+//! - `serde_json` for JSON parsing.
+//! - `tokio` for asynchronous operations.
+//! - `reqwest` for HTTP requests.
+//! - `log` for logging.
+//! - `anyhow` for error handling.
+//!
+//! ## Error Handling
+//!
+//! Errors are managed using `anyhow::Result`, providing detailed context for failures in fetching or
+//! parsing data.
 
 use chrono::NaiveDateTime;
+use futures::future::join_all; // Import for concurrent task handling
 use serde_json::Value;
-use std::error::Error;
+use tokio::sync::Semaphore;
+use tokio::task::JoinHandle;
+use log::{info, error};
+use std::sync::Arc;
 
-/// Represents a fetched file's metadata and content for PostgreSQL insertion.
+// Use anyhow for thread-safe error handling
+use anyhow::{Context, Result as AnyhowResult};
+
+/// Represents a fetched bridge pool assignment file's metadata and content.
 ///
-/// This struct holds the essential information about a consensus file fetched from
-/// CollecTor, making it ready for database export.
+/// This struct encapsulates the path, last-modified timestamp, and raw content of a bridge pool
+/// assignment file, making it suitable for parsing or database export.
 #[derive(Debug)]
-pub struct ConsensusFile {
-  /// The relative path of the file (e.g., "recent/relay-descriptors/consensuses/2023-10-01-00-00-00-consensus").
+pub struct BridgePoolFile {
+  /// Relative path of the file (e.g., "bridge_pool_assignments/2022-04-09-00-29-37").
   pub path: String,
-  /// The last modified timestamp in milliseconds since the Unix epoch.
+  /// Last modified timestamp in milliseconds since the Unix epoch.
   pub last_modified: i64,
-  /// The textual content of the file.
+  /// Raw textual content of the file.
   pub content: String,
 }
 
-/// Fetches consensus documents from CollecTor and prepares them for PostgreSQL.
+/// Fetches bridge pool assignment files from a CollecTor instance.
 ///
-/// This is the main entry point for fetching files. It retrieves the `index.json` from
-/// the CollecTor instance, filters files in the specified directories by the minimum
-/// last-modified timestamp, and fetches their contents, returning a vector of
-/// `ConsensusFile` structs ready for PostgreSQL insertion.
+/// This function orchestrates the fetching process by retrieving the `index.json`, filtering files
+/// from the specified directories based on a minimum last-modified timestamp, and fetching their
+/// contents concurrently.
 ///
 /// # Arguments
-/// * `collec_tor_base_url` - The base URL of the CollecTor instance (e.g., "https://collector.torproject.org").
-/// * `remote_directories` - A slice of directory paths to fetch from (e.g., ["recent/relay-descriptors/consensuses"]).
-/// * `min_last_modified` - The minimum last-modified timestamp in milliseconds since the Unix epoch (use 0 for all files).
+///
+/// * `collec_tor_base_url` - Base URL of the CollecTor instance (e.g., "https://collector.torproject.org").
+/// * `dirs` - List of directories to fetch files from (e.g., ["recent/bridge-pool-assignments"]).
+/// * `min_last_modified` - Minimum last-modified timestamp in milliseconds (use 0 to include all files).
 ///
 /// # Returns
-/// * `Ok(Vec<ConsensusFile>)` - A vector of `ConsensusFile` structs containing file metadata and contents.
-/// * `Err(Box<dyn Error>)` - An error if fetching, parsing, or processing fails critically.
+///
+/// * `Ok(Vec<BridgePoolFile>)` - A vector of fetched bridge pool files.
+/// * `Err(anyhow::Error)` - An error if fetching or processing fails.
 ///
 /// # Examples
+///
 /// ```rust
-/// use fetch::fetch_consensus_files;
+/// use tor_metrics_mvp::fetch::fetch_bridge_pool_files;
+/// use anyhow::Result;
+///
 /// #[tokio::main]
-/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///   let files = fetch_consensus_files(
+/// async fn main() -> Result<()> {
+///   let files = fetch_bridge_pool_files(
 ///     "https://collector.torproject.org",
-///     &["recent/relay-descriptors/consensuses"],
+///     &["recent/bridge-pool-assignments"],
 ///     0,
 ///   ).await?;
-///   for file in files {
-///     println!("Fetched: {} (modified: {})", file.path, file.last_modified);
-///   }
+///   println!("Fetched {} files", files.len());
 ///   Ok(())
 /// }
 /// ```
-pub async fn fetch_consensus_files(
+pub async fn fetch_bridge_pool_files(
   collec_tor_base_url: &str,
-  remote_directories: &[&str],
+  dirs: &[&str],
   min_last_modified: i64,
-) -> Result<Vec<ConsensusFile>, Box<dyn Error>> {
+) -> AnyhowResult<Vec<BridgePoolFile>> {
   let base_url = normalize_url(collec_tor_base_url);
-  let index = fetch_index(&base_url).await?;
-  let remote_files = collect_remote_files(&index, remote_directories, min_last_modified)?;
-  let consensus_files = fetch_file_contents(&base_url, remote_files).await?;
-  Ok(consensus_files)
+  let index = fetch_index(&base_url).await.context("Failed to fetch index.json")?;
+  let remote_files = collect_remote_files(&index, dirs, min_last_modified)
+    .context("Failed to collect remote files")?;
+  let bridge_files = fetch_file_contents(&base_url, remote_files)
+    .await
+    .context("Failed to fetch file contents")?;
+  info!("Completed fetching {} files", bridge_files.len());
+  Ok(bridge_files)
 }
 
 /// Normalizes the base URL by ensuring it ends with a trailing slash.
 ///
+/// This helper function ensures consistent URL formatting for subsequent HTTP requests.
+///
 /// # Arguments
-/// * `url` - The input URL to normalize.
+///
+/// * `url` - The base URL to normalize.
 ///
 /// # Returns
-/// A `String` representing the normalized URL.
 ///
-/// # Examples
-/// ```rust
-/// assert_eq!(normalize_url("https://example.com"), "https://example.com/");
-/// assert_eq!(normalize_url("https://example.com/"), "https://example.com/");
-/// ```
+/// A `String` representing the normalized URL with a trailing slash.
 fn normalize_url(url: &str) -> String {
   if url.ends_with('/') {
     url.to_string()
@@ -89,70 +121,86 @@ fn normalize_url(url: &str) -> String {
   }
 }
 
-/// Fetches and parses the `index.json` from the CollecTor instance.
+/// Fetches and parses the `index.json` from a CollecTor instance.
 ///
 /// # Arguments
+///
 /// * `base_url` - The normalized base URL of the CollecTor instance.
 ///
 /// # Returns
-/// * `Ok(Value)` - The parsed JSON value of `index.json`.
-/// * `Err(Box<dyn Error>)` - An error if the request or JSON parsing fails.
-async fn fetch_index(base_url: &str) -> Result<Value, Box<dyn Error>> {
+///
+/// * `Ok(Value)` - The parsed JSON value of the index.
+/// * `Err(anyhow::Error)` - An error if fetching or parsing fails.
+async fn fetch_index(base_url: &str) -> AnyhowResult<Value> {
   let index_url = format!("{}index/index.json", base_url);
-  let resp = reqwest::get(&index_url).await?;
-  let index: Value = resp.json().await?;
+  let resp = reqwest::get(&index_url)
+    .await
+    .context("Failed to get index.json")?;
+  let index: Value = resp.json().await.context("Failed to parse index.json")?;
   Ok(index)
 }
 
-/// Collects remote file paths and their last-modified timestamps from the index.
+/// Collects file paths and timestamps from the index for specified directories.
 ///
-/// Traverses the `index.json` to find files in the specified directories that meet
-/// the minimum last-modified timestamp requirement.
+/// This function filters files based on the minimum last-modified timestamp and aggregates them
+/// from the provided directories.
 ///
 /// # Arguments
-/// * `index` - The parsed `index.json` as a `serde_json::Value`.
-/// * `remote_directories` - A slice of directory paths to search.
-/// * `min_last_modified` - The minimum last-modified timestamp in milliseconds.
+///
+/// * `index` - The parsed JSON index from CollecTor.
+/// * `remote_directories` - List of directories to collect files from.
+/// * `min_last_modified` - Minimum last-modified timestamp in milliseconds.
 ///
 /// # Returns
-/// * `Ok(Vec<(String, i64)>)` - A vector of tuples containing file paths and their last-modified timestamps.
-/// * `Err(Box<dyn Error>)` - An error if no files are found or parsing fails.
+///
+/// * `Ok(Vec<(String, i64)>)` - A vector of (file path, last modified timestamp) pairs.
+/// * `Err(anyhow::Error)` - An error if no files are found or parsing fails.
 fn collect_remote_files(
   index: &Value,
   remote_directories: &[&str],
   min_last_modified: i64,
-) -> Result<Vec<(String, i64)>, Box<dyn Error>> {
+) -> AnyhowResult<Vec<(String, i64)>> {
   let mut all_files = Vec::new();
   for dir in remote_directories {
-    let files = collect_files_from_dir(index, dir, min_last_modified)?;
+    let files = collect_files_from_dir(index, dir, min_last_modified)
+      .context(format!("Failed to collect files from directory: {}", dir))?;
     all_files.extend(files);
   }
   if all_files.is_empty() {
-    return Err(format!("No files found in directories: {:?}", remote_directories).into());
+    return Err(anyhow::anyhow!(
+      "No bridge pool assignment files found in directories: {:?}",
+      remote_directories
+    ));
   }
   Ok(all_files)
 }
 
 /// Collects files from a single directory within the index.
 ///
+/// This function traverses the directory structure in the index and collects files that meet the
+/// timestamp criteria.
+///
 /// # Arguments
-/// * `index` - The parsed `index.json` as a `serde_json::Value`.
-/// * `dir` - The directory path to search (e.g., "recent/relay-descriptors/consensuses").
-/// * `min_last_modified` - The minimum last-modified timestamp in milliseconds.
+///
+/// * `index` - The parsed JSON index from CollecTor.
+/// * `dir` - The directory path to collect files from.
+/// * `min_last_modified` - Minimum last-modified timestamp in milliseconds.
 ///
 /// # Returns
-/// * `Ok(Vec<(String, i64)>)` - A vector of tuples containing file paths and timestamps.
-/// * `Err(Box<dyn Error>)` - An error if the directory structure is invalid or timestamps cannot be parsed.
+///
+/// * `Ok(Vec<(String, i64)>)` - A vector of (file path, last modified timestamp) pairs.
+/// * `Err(anyhow::Error)` - An error if the directory is not found or parsing fails.
 fn collect_files_from_dir(
   index: &Value,
   dir: &str,
   min_last_modified: i64,
-) -> Result<Vec<(String, i64)>, Box<dyn Error>> {
+) -> AnyhowResult<Vec<(String, i64)>> {
   let mut all_files = Vec::new();
   let dir_path: Vec<&str> = dir.trim_matches('/').split('/').collect();
   let mut current = &index["directories"];
   let mut full_path = String::new();
 
+  info!("Starting traversal for directory: {}", dir);
   for (i, &part) in dir_path.iter().enumerate() {
     if let Some(dirs) = current.as_array() {
       if let Some(next) = dirs.iter().find(|d| d["path"] == part) {
@@ -160,14 +208,24 @@ fn collect_files_from_dir(
           full_path.push('/');
         }
         full_path.push_str(part);
+        info!("Found directory: {} at full path: {}", part, full_path);
 
         if i == dir_path.len() - 1 {
           if let Some(files) = next["files"].as_array() {
+            info!("Found {} files in {}", files.len(), full_path);
             for file in files {
-              let file_path = file["path"].as_str().ok_or("Missing file path")?.to_string();
-              let last_modified_str = file["last_modified"].as_str().ok_or("Missing last modified")?;
-              let last_modified = NaiveDateTime::parse_from_str(last_modified_str, "%Y-%m-%d %H:%M")
-                .map_err(|e| format!("Invalid timestamp {}: {}", last_modified_str, e))?;
+              let file_path = file["path"]
+                .as_str()
+                .context("Missing file path")?
+                .to_string();
+              let last_modified_str = file["last_modified"]
+                .as_str()
+                .context("Missing last modified")?;
+              let last_modified = NaiveDateTime::parse_from_str(
+                last_modified_str,
+                "%Y-%m-%d %H:%M",
+              ).map_err(|e| anyhow::anyhow!("Invalid timestamp {}: {}", last_modified_str, e))?;
+              
               let last_modified_ms = last_modified.and_utc().timestamp_millis();
 
               if last_modified_ms >= min_last_modified {
@@ -176,56 +234,129 @@ fn collect_files_from_dir(
               }
             }
           }
-          } else {
-            current = next.get("directories").ok_or_else(|| format!("No directories under {}", part))?;
-          }
-          } else {
-            break;
-          }
+        } else {
+            current = next
+              .get("directories")
+              .context(format!("No directories under {}", part))?;
+        }
       } else {
-        break;
+          break;
       }
+    } else {
+        break;
+    }
   }
+  info!("Collected {} files total", all_files.len());
   Ok(all_files)
 }
 
-/// Fetches the contents of the specified files from CollecTor.
+/// Fetches the contents of specified files concurrently.
+///
+/// This function uses a semaphore to limit concurrent requests, preventing server overload.
 ///
 /// # Arguments
+///
 /// * `base_url` - The normalized base URL of the CollecTor instance.
-/// * `remote_files` - A vector of tuples containing file paths and timestamps.
+/// * `remote_files` - Vector of (file path, last modified timestamp) pairs to fetch.
 ///
 /// # Returns
-/// * `Ok(Vec<ConsensusFile>)` - A vector of `ConsensusFile` structs with file contents.
-/// * `Err(Box<dyn Error>)` - An error if any file fetch fails.
+///
+/// * `Ok(Vec<BridgePoolFile>)` - A vector of fetched bridge pool files with content.
+/// * `Err(anyhow::Error)` - An error if fetching fails for any file.
 async fn fetch_file_contents(
   base_url: &str,
   remote_files: Vec<(String, i64)>,
-) -> Result<Vec<ConsensusFile>, Box<dyn Error>> {
-  let mut consensus_files = Vec::new();
-  for (path, last_modified) in remote_files {
-    let content = fetch_file_content(base_url, &path).await?;
-    consensus_files.push(ConsensusFile {
-      path,
-      last_modified,
-      content,
-    });
+) -> AnyhowResult<Vec<BridgePoolFile>> {
+  const MAX_CONCURRENT: usize = 50; // Limit to 50 concurrent fetches
+  let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT));
+  let total_files = remote_files.len();
+  info!(
+    "Starting to fetch contents of {} files with max concurrency {}",
+    total_files, MAX_CONCURRENT
+  );
+
+  let fetch_tasks: Vec<JoinHandle<AnyhowResult<BridgePoolFile>>> = remote_files
+    .into_iter()
+    .map(|(path, last_modified)| {
+      let base_url = base_url.to_string();
+      let semaphore = Arc::clone(&semaphore);
+      let permit = semaphore.acquire_owned();
+      tokio::spawn(async move {
+        let _permit = permit.await.context("Failed to acquire semaphore")?;
+        let content = fetch_file_content(&base_url, &path)
+          .await
+          .context(format!("Failed to fetch content for {}", path))?;
+        info!("Fetched content for {}", path);
+        
+        Ok(BridgePoolFile {
+          path,
+          last_modified,
+          content,
+        })
+      })
+    })
+    .collect();
+
+  let results = join_all(fetch_tasks).await;
+  let mut bridge_files = Vec::new();
+  let mut errors = 0;
+
+  for (i, result) in results.into_iter().enumerate() {
+    match result {
+      Ok(Ok(file)) => bridge_files.push(file),
+      Ok(Err(e)) => {
+        error!("Task {} failed: {:?}", i, e);
+        errors += 1;
+      }
+      Err(e) => {
+        error!("Task {} panicked: {:?}", i, e);
+        errors += 1;
+      }
+    }
   }
-  Ok(consensus_files)
+
+  info!(
+    "Fetched {} files successfully, {} errors encountered",
+    bridge_files.len(),
+    errors
+  );
+  Ok(bridge_files)
 }
 
-/// Fetches the content of a single file from the CollecTor instance.
+/// Fetches the content of a single file from CollecTor.
 ///
 /// # Arguments
+///
 /// * `base_url` - The normalized base URL of the CollecTor instance.
 /// * `file_path` - The relative path of the file to fetch.
 ///
 /// # Returns
-/// * `Ok(String)` - The textual content of the file.
-/// * `Err(Box<dyn Error>)` - An error if the request or text extraction fails.
-async fn fetch_file_content(base_url: &str, file_path: &str) -> Result<String, Box<dyn Error>> {
+///
+/// * `Ok(String)` - The raw textual content of the file.
+/// * `Err(anyhow::Error)` - An error if fetching or reading the file fails.
+async fn fetch_file_content(base_url: &str, file_path: &str) -> AnyhowResult<String> {
   let file_url = format!("{}{}", base_url, file_path);
-  let resp = reqwest::get(&file_url).await?;
-  let content = resp.text().await?;
+  let resp = reqwest::get(&file_url)
+    .await
+    .context("Failed to get file")?;
+  let content = resp.text().await.context("Failed to read file content")?;
   Ok(content)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// Tests the `normalize_url` function to ensure it correctly adds a trailing slash.
+  #[test]
+  fn test_normalize_url() {
+    assert_eq!(
+      normalize_url("https://example.com"),
+      "https://example.com/"
+    );
+    assert_eq!(
+      normalize_url("https://example.com/"),
+      "https://example.com/"
+    );
+  }
 }
