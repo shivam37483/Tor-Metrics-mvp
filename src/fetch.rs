@@ -266,7 +266,7 @@ async fn fetch_file_contents(
   base_url: &str,
   remote_files: Vec<(String, i64)>,
 ) -> AnyhowResult<Vec<BridgePoolFile>> {
-  const MAX_CONCURRENT: usize = 50; // Limit to 50 concurrent fetches
+  const MAX_CONCURRENT: usize = 50;
   let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT));
   let total_files = remote_files.len();
   info!(
