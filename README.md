@@ -136,7 +136,7 @@ The application uses two PostgreSQL tables to store the data:
       - **transport** (TEXT, nullable): Transport protocol (e.g., "obfs4").
       - **ip** (TEXT, nullable): IP address.
       - **blocklist** (TEXT, nullable): Blocklist identifier.
-      - **bridge_pool_assignments** (TEXT): References the file digest.
+      - **bridge_pool_assignments** (TEXT): Foreign key referencing bridge_pool_assignments_file.digest.
       - **distributed** (BOOLEAN): Distribution status (defaults to false).
       - **state** (TEXT, nullable): State information.
       - **bandwidth** (TEXT, nullable): Bandwidth value.
