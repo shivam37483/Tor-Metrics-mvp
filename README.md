@@ -75,13 +75,11 @@ To use `bridge_pool_assignments`, follow these steps:
     - Windows
       ```sh
       set RUST_LOG=info
-      cargo run
       ```
 
     - Mac/Linux
       ```sh
       export RUST_LOG=info
-      cargo run
       ```
 
     Log levels include error, warn, info, debug, and trace.
