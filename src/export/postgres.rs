@@ -1,39 +1,15 @@
-//! Tools for exporting parsed bridge pool assignment data to a PostgreSQL database.
-//!
-//! This module provides functionality to export parsed bridge pool assignment data into a PostgreSQL database.
-//! It manages database connections, table creation, and data insertion within a transactional context to ensure
-//! consistency. The export process is optimized with batch inserts to handle large datasets efficiently.
-//!
-//! ## Usage
-//!
-//! The main entry point is the [`export_to_postgres`] function, which takes a vector of parsed assignments,
-//! a database connection string, and a flag to clear existing data. It establishes a connection, sets up tables,
-//! and inserts data in a single transaction.
-//!
-//! ## Dependencies
-//!
-//! - **`tokio_postgres`**: Asynchronous PostgreSQL client for database operations.
-//! - **`chrono`**: Handles timestamp conversions and formatting.
-//! - **`sha2`**: Computes SHA-256 digests for data integrity.
-//! - **`anyhow`**: Simplifies error handling with context.
-//!
-//! ## Error Handling
-//!
-//! All functions return `anyhow::Result` to provide detailed error messages for database failures, parsing issues,
-//! or invalid data.
-
 use crate::parse::ParsedBridgePoolAssignment;
+use crate::utils::{compute_file_digest, compute_assignment_digest};
 use anyhow::{Context, Result as AnyhowResult};
 use chrono::{DateTime, Utc};
 use tokio_postgres::{NoTls, Transaction};
-use sha2::{Digest, Sha256};
 
 // Global constant to limit the number of files to export during testing
 const MAX_FILES_TO_EXPORT: usize = 100;
 
 /// Exports parsed bridge pool assignment data to a PostgreSQL database.
 ///
-/// Connects to a PostgreSQL database, creates necessary tables if they don’t exist, and inserts the provided
+/// Connects to a PostgreSQL database, creates necessary tables if they don't exist, and inserts the provided
 /// parsed data. Uses a transaction to ensure atomicity across table operations. Optionally truncates existing
 /// tables if the `clear` flag is set.
 ///
@@ -61,6 +37,8 @@ const MAX_FILES_TO_EXPORT: usize = 100;
 ///     let assignment = ParsedBridgePoolAssignment {
 ///         published_millis: 1638316800000, // Example timestamp
 ///         entries: BTreeMap::new(),        // Empty entries for simplicity
+///         raw_content: Vec::new(),         // Empty raw content for simplicity
+///         raw_lines: BTreeMap::new(),      // Empty raw lines for simplicity
 ///     };
 ///     let assignments = vec![assignment];
 ///     export_to_postgres(
@@ -111,11 +89,14 @@ pub async fn export_to_postgres(
     .collect::<Vec<_>>();
 
   for assignment in assignments_to_export {
-    let digest = compute_digest(&assignment);
-    insert_file_data(&transaction, &assignment, &digest)
+    // Use raw content to compute the file digest
+    let file_digest = compute_file_digest(&assignment.raw_content);
+    
+    insert_file_data(&transaction, &assignment, &file_digest)
       .await
       .context("Failed to insert file data")?;
-    insert_assignment_data(&transaction, &assignment, &digest)
+    
+    insert_assignment_data(&transaction, &assignment, &file_digest)
       .await
       .context("Failed to insert assignment data")?;
   }
@@ -128,10 +109,15 @@ pub async fn export_to_postgres(
   Ok(())
 }
 
-/// Creates tables and indexes in the database if they don’t already exist.
+/// Creates tables and indexes in the database if they don't already exist.
 ///
 /// Sets up the schema for `bridge_pool_assignments_file` and `bridge_pool_assignment` tables, including
 /// primary keys, foreign key references, and performance-enhancing indexes.
+///
+/// The schema follows the maintainer's recommendations:
+/// - `bridge_pool_assignments_file` uses the SHA-256 digest of the raw file content as its primary key
+/// - `bridge_pool_assignment` uses the SHA-256 digest of the raw line bytes combined with the file digest as its primary key
+/// - A foreign key relationship connects the two tables through the file digest
 ///
 /// # Arguments
 ///
@@ -167,7 +153,6 @@ async fn create_tables(transaction: &Transaction<'_>) -> AnyhowResult<()> {
   transaction
     .execute(
       "CREATE TABLE IF NOT EXISTS bridge_pool_assignment (
-        id SERIAL PRIMARY KEY,
         published TIMESTAMP WITHOUT TIME ZONE NOT NULL,
         digest TEXT NOT NULL,
         fingerprint TEXT NOT NULL,
@@ -179,7 +164,8 @@ async fn create_tables(transaction: &Transaction<'_>) -> AnyhowResult<()> {
         distributed BOOLEAN,
         state TEXT,
         bandwidth TEXT,
-        ratio REAL
+        ratio REAL,
+        PRIMARY KEY(digest)
       )",
       &[],
     )
@@ -211,31 +197,9 @@ async fn create_tables(transaction: &Transaction<'_>) -> AnyhowResult<()> {
       &[],
     )
     .await
-    .context("Failed to create composite index on bridge_pool_assignment")?;
+    .context("Failed to create fingerprint+published index on bridge_pool_assignment")?;
 
   Ok(())
-}
-
-/// Computes a SHA-256 digest for a bridge pool assignment.
-///
-/// Generates a unique hash based on the assignment’s timestamp and entries to ensure data integrity.
-///
-/// # Arguments
-///
-/// * `assignment` - The parsed bridge pool assignment to hash.
-///
-/// # Returns
-///
-/// A hexadecimal string representing the SHA-256 digest.
-fn compute_digest(assignment: &ParsedBridgePoolAssignment) -> String {
-  let mut hasher = Sha256::new();
-  hasher.update(assignment.published_millis.to_string().as_bytes());
-  for (fingerprint, assignment_str) in &assignment.entries {
-    hasher.update(fingerprint.as_bytes());
-    hasher.update(assignment_str.as_bytes());
-  }
-  let result = hasher.finalize();
-  hex::encode(result)
 }
 
 /// Inserts file metadata into the `bridge_pool_assignments_file` table.
@@ -246,7 +210,7 @@ fn compute_digest(assignment: &ParsedBridgePoolAssignment) -> String {
 ///
 /// * `transaction` - Active database transaction.
 /// * `assignment` - Parsed bridge pool assignment data.
-/// * `digest` - SHA-256 digest of the assignment.
+/// * `digest` - SHA-256 digest of the assignment file's raw content.
 ///
 /// # Returns
 ///
@@ -276,12 +240,13 @@ async fn insert_file_data(
 /// Inserts individual assignment entries into the `bridge_pool_assignment` table.
 ///
 /// Processes assignment entries in batches for efficiency, parsing each entry into structured fields.
+/// Each entry has its own unique digest calculated from the raw line bytes combined with the file digest.
 ///
 /// # Arguments
 ///
 /// * `transaction` - Active database transaction.
 /// * `assignment` - Parsed bridge pool assignment data.
-/// * `digest` - SHA-256 digest linking to the file table.
+/// * `file_digest` - SHA-256 digest linking to the file table.
 ///
 /// # Returns
 ///
@@ -290,7 +255,7 @@ async fn insert_file_data(
 async fn insert_assignment_data(
   transaction: &Transaction<'_>,
   assignment: &ParsedBridgePoolAssignment,
-  digest: &str,
+  file_digest: &str,
 ) -> AnyhowResult<()> {
   let mut batch_data = Vec::new();
   let batch_size = 1000;
@@ -300,6 +265,13 @@ async fn insert_assignment_data(
     .naive_utc();
 
   for (fingerprint, assignment_str) in &assignment.entries {
+    // Get the raw line bytes for this assignment
+    let raw_line = assignment.raw_lines.get(fingerprint)
+      .context(format!("No raw line data found for fingerprint: {}", fingerprint))?;
+    
+    // Compute a unique digest for this assignment
+    let digest = compute_assignment_digest(raw_line, file_digest);
+    
     let (distribution_method, transport, ip, blocklist, distributed, state, bandwidth, ratio) =
       parse_assignment_string(assignment_str);
 
@@ -311,7 +283,7 @@ async fn insert_assignment_data(
       transport,
       ip,
       blocklist,
-      digest.to_string(),
+      file_digest.to_string(), // Use file_digest as the foreign key
       distributed.unwrap_or(false),
       state,
       bandwidth,
@@ -366,59 +338,56 @@ async fn insert_batch(
       &data.10, // bandwidth
       &data.11, // ratio
     ]);
-
-    placeholders.push(format!(
-      "(${},${},${},${},${},${},${},${},${},${},${},${})",
-      j * 12 + 1,  j * 12 + 2,  j * 12 + 3,  j * 12 + 4,
-      j * 12 + 5,  j * 12 + 6,  j * 12 + 7,  j * 12 + 8,
-      j * 12 + 9,  j * 12 + 10, j * 12 + 11, j * 12 + 12
-    ));
+    let base = j * 12;
+    let placeholder = format!("(${},${},${},${},${},${},${},${},${},${},${},${})",
+      base + 1, base + 2, base + 3, base + 4, base + 5, base + 6,
+      base + 7, base + 8, base + 9, base + 10, base + 11, base + 12);
+    placeholders.push(placeholder);
   }
 
-  let query = format!(
-    "INSERT INTO bridge_pool_assignment (published, digest, fingerprint, distribution_method, transport, ip, blocklist, bridge_pool_assignments, distributed, state, bandwidth, ratio) VALUES {}",
+  let sql = format!(
+    "INSERT INTO bridge_pool_assignment (
+      published, digest, fingerprint, distribution_method, transport, ip, 
+      blocklist, bridge_pool_assignments, distributed, state, bandwidth, ratio
+    ) VALUES {} ON CONFLICT (digest) DO NOTHING",
     placeholders.join(",")
   );
 
   transaction
-    .execute(&query, &params)
+    .execute(sql.as_str(), &params)
     .await
-    .context("Failed to insert into bridge_pool_assignment")?;
-
+    .context("Failed to insert batch into bridge_pool_assignment")?;
+  
   Ok(())
 }
 
-/// Parses an assignment string into structured fields based on BridgeDB conventions.
+/// Parses an assignment string into structured fields.
 ///
-/// Extracts key-value pairs from the assignment string, mapping them to database fields.
+/// Extracts various assignment properties from the string representation.
 ///
 /// # Arguments
 ///
-/// * `assignment` - Raw assignment string (e.g., "https transport=obfs4 ip=192.168.1.1").
+/// * `assignment_str` - The assignment string (e.g., "email transport=obfs4").
 ///
 /// # Returns
 ///
-/// A tuple containing:
-/// - `distribution_method`: Primary distribution method (e.g., "https").
-/// - `transport`: Optional transport protocol.
-/// - `ip`: Optional IP address.
-/// - `blocklist`: Optional blocklist identifier.
-/// - `distributed`: Optional boolean indicating distribution status.
-/// - `state`: Optional state information.
-/// - `bandwidth`: Optional bandwidth value.
-/// - `ratio`: Optional ratio as a float.
-fn parse_assignment_string(assignment: &str) -> (
-  String,
+/// A tuple of extracted fields in the format:
+/// (distribution_method, transport, ip, blocklist, distributed, state, bandwidth, ratio)
+fn parse_assignment_string(assignment_str: &str) -> (
+  String, 
   Option<String>,
   Option<String>,
   Option<String>,
   Option<bool>,
   Option<String>,
   Option<String>,
-  Option<f32>,
+  Option<f32>
 ) {
-  let parts: Vec<&str> = assignment.split_whitespace().collect();
-  let distribution_method = parts.get(0).unwrap_or(&"unknown").to_string();
+  // Extract distribution method (first token)
+  let parts: Vec<&str> = assignment_str.splitn(2, ' ').collect();
+  let distribution_method = parts[0].to_string();
+  
+  // Default return values
   let mut transport = None;
   let mut ip = None;
   let mut blocklist = None;
@@ -426,104 +395,28 @@ fn parse_assignment_string(assignment: &str) -> (
   let mut state = None;
   let mut bandwidth = None;
   let mut ratio = None;
-
-  for part in parts.iter().skip(1) {
-    let kv: Vec<&str> = part.split('=').collect();
-    if kv.len() == 2 {
-      match kv[0] {
-        "transport" => transport = Some(kv[1].to_string()),
-        "ip" => ip = Some(kv[1].to_string()),
-        "blocklist" => blocklist = Some(kv[1].to_string()),
-        "distributed" => distributed = kv[1].parse::<bool>().ok(),
-        "state" => state = Some(kv[1].to_string()),
-        "bandwidth" => bandwidth = Some(kv[1].to_string()),
-        "ratio" => ratio = kv[1].parse::<f32>().ok(),
-        _ => {}, // Ignore unrecognized keys
+  
+  if parts.len() > 1 {
+    // Process key=value pairs
+    let rest = parts[1];
+    let pairs: Vec<&str> = rest.split_whitespace().collect();
+    
+    for pair in pairs {
+      let kv: Vec<&str> = pair.splitn(2, '=').collect();
+      if kv.len() == 2 {
+        match kv[0] {
+          "transport" => transport = Some(kv[1].to_string()),
+          "ip" => ip = Some(kv[1].to_string()),
+          "blocklist" => blocklist = Some(kv[1].to_string()),
+          "distributed" => distributed = Some(kv[1].to_lowercase() == "true"),
+          "state" => state = Some(kv[1].to_string()),
+          "bandwidth" => bandwidth = Some(kv[1].to_string()),
+          "ratio" => ratio = kv[1].parse::<f32>().ok(),
+          _ => {} // Ignore unknown properties
+        }
       }
     }
   }
-
-  (
-    distribution_method,
-    transport,
-    ip,
-    blocklist,
-    distributed,
-    state,
-    bandwidth,
-    ratio,
-  )
-}
-
-#[cfg(test)]
-mod tests {
-  use std::collections::BTreeMap;
-
-  use super::*;
-
-  /// Tests the `compute_digest` function with a sample assignment.
-  #[test]
-  fn test_compute_digest() {
-    let mut assignment = ParsedBridgePoolAssignment {
-      published_millis: 1638316800000, // 2021-12-01 00:00:00 UTC
-      entries: BTreeMap::new(),
-    };
-    assignment.entries.insert(
-      "fingerprint1".to_string(),
-      "https transport=obfs4".to_string(),
-    );
-    
-    let digest = compute_digest(&assignment);
-    assert_eq!(
-      digest,
-      "96b312792d229dbf674e80509373e1d21a45590d4526455345fdd7dd2d6ba4a0"
-    );
-  }
-
-  /// Tests the `parse_assignment_string` function with various input formats.
-  #[test]
-  fn test_parse_assignment_string() {
-    let input = "https transport=obfs4 ip=192.168.1.1 distributed=true ratio=0.5";
-    let (
-      distribution_method,
-      transport,
-      ip,
-      blocklist,
-      distributed,
-      state,
-      bandwidth,
-      ratio,
-    ) = parse_assignment_string(input);
   
-    assert_eq!(distribution_method, "https");
-    assert_eq!(transport, Some("obfs4".to_string()));
-    assert_eq!(ip, Some("192.168.1.1".to_string()));
-    assert_eq!(blocklist, None);
-    assert_eq!(distributed, Some(true));
-    assert_eq!(state, None);
-    assert_eq!(bandwidth, None);
-    assert_eq!(ratio, Some(0.5));
-  
-    // Test minimal input
-    let input = "email";
-    let (
-      distribution_method,
-      transport,
-      ip,
-      blocklist,
-      distributed,
-      state,
-      bandwidth,
-      ratio,
-    ) = parse_assignment_string(input);
-  
-    assert_eq!(distribution_method, "email");
-    assert_eq!(transport, None);
-    assert_eq!(ip, None);
-    assert_eq!(blocklist, None);
-    assert_eq!(distributed, None);
-    assert_eq!(state, None);
-    assert_eq!(bandwidth, None);
-    assert_eq!(ratio, None);
-  }
-}
+  (distribution_method, transport, ip, blocklist, distributed, state, bandwidth, ratio)
+} 

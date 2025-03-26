@@ -1,6 +1,6 @@
 [package]
 name = "bridge_pool_assignments"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 authors = ["Shivam vatshivam4988@gmail.com"]
 description = "A crate to fetch, parse, and export Tor bridge pool assignment documents to PostgreSQL."

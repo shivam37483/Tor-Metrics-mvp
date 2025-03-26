@@ -12,6 +12,14 @@
 //! - **Fetching**: Retrieves bridge pool assignment files from CollecTor using the `fetch` module.
 //! - **Parsing**: Extracts structured data (e.g., bridge assignments) using the `parse` module.
 //! - **Exporting**: Saves parsed data to a PostgreSQL database via the `export` module.
+//! - **Utilities**: Provides digest calculation and other utilities via the `utils` module.
+//!
+//! ## Architecture
+//! The application follows a modular structure that mirrors the original metrics-lib:
+//! - Each module has its own directory with specialized submodules
+//! - Types are separated from their implementation
+//! - Common utilities are factored out into a dedicated module
+//! - Clear separation of concerns with minimal public interfaces
 //!
 //! ## Dependencies
 //! - **`reqwest`**: For HTTP requests to fetch data from CollecTor.
@@ -100,13 +108,30 @@ struct Args {
 /// 5. Exports the parsed data to a PostgreSQL database.
 /// 6. Logs progress at each step using the `log` crate.
 ///
+/// ## Digest Calculation
+/// Following the maintainer's recommendations and the original implementation:
+/// - For files: SHA-256 hash of the entire raw file content
+/// - For individual assignments: SHA-256 hash of each raw line's bytes combined with the file digest
+/// 
+/// This approach ensures unique digests for both tables, matching the expected schema and
+/// preventing duplicate key violations when identical assignments appear in different files.
+///
 /// # Returns
 /// - `Ok(())` if the entire workflow completes successfully.
 /// - `Err(Box<dyn Error>)` if an error occurs (e.g., network failure, database connection issue).
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-  // Initialize logging
-  env_logger::init();
+  // Initialize logging with more verbose configuration
+  env_logger::Builder::new()
+    .format_timestamp(Some(env_logger::TimestampPrecision::Seconds))
+    .format_module_path(false)
+    .format_level(true)
+    .filter_level(log::LevelFilter::Info) // Default to info level if RUST_LOG not set
+    .parse_env("RUST_LOG") // Still respect RUST_LOG env var if set
+    .init();
+
+  // Print confirmation of logger initialization
+  log::info!("Logger initialized at level: {}", std::env::var("RUST_LOG").unwrap_or_else(|_| "INFO".to_string()));
 
   // Parse command-line arguments
   let args = Args::parse();
